@@ -11,4 +11,4 @@ Dalším častým problémem bylo rozdílné pojmenování zemí a jejich hlavn�
 
 Narazil jsem také na záznamy, kde bylo potřeba změnit nebo převést datový typ. Jako příklad uvádím °C v tabulce o počasí, kde jsem musel odstranit tento znak a převést datový typ na INT, abych s ním mohl dále pracovat. 
 
-Je to můj první takhle velký SQL skript. Budu moc rád za připomínky a návrhy, jak ho udělat rychlejší a efektivnější. Zejména poslední část, kdy připojuji data o počasí. Přestože jsem se snažil o maximální optimalizaci, výsledná tabulka se generuje několik minut.
+Je to můj první takhle velký SQL skript. Budu moc rád za připomínky a návrhy, jak ho udělat rychlejší a efektivnější. Zejména poslední část, kdy připojuji data o počasí. Přestože jsem se snažil o maximální optimalizaci, výsledná tabulka se generuje několik desítek minut.
