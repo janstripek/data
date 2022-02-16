@@ -1,1 +1,396 @@
+-- --------------------------------------------------------------
+-- INFO ---------------------------------------------------------
+-- --------------------------------------------------------------
+
+-- skript je rozdelen do dvou dilcich casti, 1. priprava a cisteni dat, 2. spojeni tabulek a vygenerovani vyslednych panelovych dat
+-- snazil jsem se pouzit nejaktualnejsi data, nekde byly uvedeny vickrat, bral jsem vzdy ta, kde bylo mozne dohledat, z jakeho jsou roku
+-- POZOR -- nekde jsou United States, jinde US, proto muzou byt nekde NULLs, i kdyz ty data jsou, ZKONTROLOVAT JESTE!
+
+
+-- --------------------------------------------------------------
+-- PRIPRAVA TABULEK A CISTENI DAT -------------------------------
+-- --------------------------------------------------------------
+
+ 
+
+
+
+
+-- vytvoreni tabulky, kde jsou pouze zeme z covid19_basic_differences, pomuze k vycisteni dat napr. z tabulky economies
+CREATE OR REPLACE TABLE t_jan_stripek_countries_only AS
+	SELECT DISTINCT 
+		country 
+	FROM covid19_basic_differences;
+
+-- SELECT * FROM t_jan_stripek_countries_only;
+
+
+-- pocet testu
+CREATE OR REPLACE TABLE t_jan_stripek_tests_performed AS
+	SELECT
+		date,
+		country,
+		tests_performed 
+	FROM covid19_tests
+	WHERE date > '2020-01-21' AND date < '2021-05-24';
+ 
+
+-- data z giniho koeficentu jsou nekompletni a zastarala, u vsech zemi, kde nejaka data jsou, vyberu nejnovejsi zaznam
+CREATE OR REPLACE TABLE t_jan_stripek_gini AS
+	SELECT 
+		country,
+		MAX (year) AS gini_data_from,
+		gini
+	FROM economies e 
+	WHERE gini IS NOT NULL
+	GROUP BY country; 
+
+-- vytvoreni nove tabulky se vsemi zememi a dostupnymi gini koeficienty
+CREATE OR REPLACE TABLE t_jan_stripek_gini_complete AS
+	SELECT 
+		co.country, 
+		g.gini_data_from, 
+		g.gini 
+	FROM t_jan_stripek_countries_only co
+	LEFT JOIN t_jan_stripek_gini g
+	ON co.country = g.country
+	ORDER BY co.country;
+
+-- population density, gdp per capita jsou pro rok 2020
+-- vytvoreni pomocne tabulky economies_2020 ke spocitani population density a GDP per capita
+CREATE OR REPLACE TABLE t_jan_stripek_economies_2020 AS
+	SELECT
+		co.country, e2020.population, e2020.GDP
+	FROM t_jan_stripek_countries_only co
+		LEFT JOIN (
+			SELECT * FROM economies e 
+			WHERE year = 2020
+			AND country IN (SELECT * FROM t_jan_stripek_countries_only)) e2020
+		ON co.country = e2020.country
+	ORDER BY co.country;
+
+ALTER TABLE t_jan_stripek_economies_2020
+ADD PRIMARY KEY (country(32) );
+
+
+-- vytvoreni pomocne tabulky surface_area ke spocitani population density
+CREATE OR REPLACE TABLE t_jan_stripek_surface_area AS
+	SELECT 
+		co.country,
+		c.surface_area
+	FROM t_jan_stripek_countries_only co
+		LEFT JOIN countries c 
+		ON co.country = c.country 
+	ORDER BY co.country;
+
+-- tabulka population density 
+CREATE OR REPLACE TABLE	t_jan_stripek_population_density AS
+	SELECT 
+		pop.country,
+		pop.population,
+		sa.surface_area,
+		ROUND (pop.population / sa.surface_area, 2) AS population_density
+	FROM t_jan_stripek_economies_2020 pop
+		LEFT JOIN t_jan_stripek_surface_area sa 
+		ON pop.country = sa.country;
+
+ALTER TABLE t_jan_stripek_population_density
+ADD PRIMARY KEY (country(32) );
+
+-- tabulka s detskou umrtnosti, data z roku 2019, pro 2020 nejsou
+CREATE OR REPLACE TABLE t_jan_stripek_mortality_under5 AS
+	SELECT 
+		co.country, 
+		e2019.mortaliy_under5 AS mortality_under5_2019
+	FROM t_jan_stripek_countries_only co
+		LEFT JOIN (SELECT * FROM economies WHERE year = 2019) e2019
+		ON co.country = e2019.country
+	ORDER BY co.country;
+
+ALTER TABLE t_jan_stripek_mortality_under5
+ADD PRIMARY KEY (country(32) );
+
+-- median pro rok 2018
+CREATE OR REPLACE TABLE t_jan_stripek_median_2018 AS
+	SELECT
+		c.country,
+		c.median_age_2018 
+	FROM countries c 
+	WHERE country IN (SELECT * FROM t_jan_stripek_countries_only);  
+
+ALTER TABLE t_jan_stripek_median_2018
+ADD PRIMARY KEY (country(32) );
+
+
+-- podily jednotlivych nabozenstvi
+CREATE OR REPLACE TABLE t_jan_stripek_religion_2020 AS
+	SELECT
+		r.country, 
+		r.religion,
+		round (r.population / r2.total_population_2020 * 100, 2) AS religion_share_2020
+	FROM religions r 
+	JOIN (  
+			SELECT r.country , r.year,  sum(r.population) as total_population_2020
+	        FROM religions r 
+	        WHERE r.year = 2020 
+	        GROUP BY r.country
+	) r2
+		ON r.country = r2.country
+	    AND r.year = r2.year
+	    AND r.population > 0; 
+	   
+-- life expectancy	
+CREATE OR REPLACE TABLE t_jan_stripek_life_expectancy_diff AS   
+	SELECT 
+		a.country, 
+		a.life_exp_1965,
+		b.life_exp_2015,
+		ROUND (b.life_exp_2015 - a.life_exp_1965, 2)  as life_exp_diff_2015_1965
+	FROM (
+	    SELECT le.country , le.life_expectancy as life_exp_1965
+	    FROM life_expectancy le 
+	    WHERE year = 1965 AND COUNTRY IN (SELECT * FROM t_jan_stripek_countries_only) 
+	    ) a 
+	    LEFT JOIN (
+		    SELECT le.country , le.life_expectancy as life_exp_2015
+		    FROM life_expectancy le 
+		    WHERE year = 2015
+	    ) b
+	    ON a.country = b.country;	   
+	   
+	   
+
+-- WEATHER ---------------------------------------------
+
+	   
+-- tabulka weather ma jen zaznamy o hlavnich mestech, potrebuji ji napojit na countries, abych dostal prislusejici zeme
+-- zjistuji, jestli jsou nejake rozdily v pojmenovani mest, vysly mi tyto zaznamy: Athens, Brussels, Bucharest, Helsinki, Kiev, Lisbon, Luxembourg, Prague, Rome, Vienna, Warsaw
+	   
+-- nefunguje bohuzel, musel jsem prozatim udelat rucne seznam tech mest
+/*SELECT 
+city 
+FROM weather 
+WHERE city NOT IN (SELECT capital_city FROM countries)
+GROUP BY city	*/   
+
+	   
+CREATE OR REPLACE TABLE t_jan_stripek_countries_capitals AS
+	SELECT
+		country,
+		capital_city 
+	FROM countries;
+  
+
+-- SELECT * FROM t_jan_stripek_countries_capitals;
+
+
+-- update zemi tak, aby odpovidaly zemim v covid basic differences
+UPDATE t_jan_stripek_countries_capitals SET country = 'Cabo Verde' WHERE country = 'Cape Verde';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Congo (Brazzaville)' WHERE country = 'Congo';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Czechia' WHERE country = 'Czech Republic';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Fiji' WHERE country = 'Fiji Islands';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Holy See' WHERE country = 'Holy See (Vatican City State)';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Korea, South' WHERE country = 'South Korea';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Libya' WHERE country = 'Libyan Arab Jamahiriya';
+UPDATE t_jan_stripek_countries_capitals SET country = 'Russia' WHERE country = 'Russian Federation';
+UPDATE t_jan_stripek_countries_capitals SET country = 'US' WHERE country = 'United States';
+
+-- SELECT * FROM t_jan_stripek_countries_capitals
+
+-- vytvoreni upravene tabulky weather, zatim bez countries
+-- prevod datetime na date a odstraneni '°c' z teploty a prevod z textu na int, aby se dal spocitat prumer
+CREATE OR REPLACE TABLE t_jan_stripek_weather_01 AS
+	SELECT 
+		CAST(w.date AS date) AS date2,
+		w.time,
+		CAST (TRIM('°c' FROM temp ) AS int) AS temp2,
+		CAST (TRIM('km/h' FROM gust ) AS int) AS gust2,
+		w.rain,
+		w.city
+	FROM weather w;
+
+
+-- SELECT * FROM t_jan_stripek_weather_01;
+
+-- uprava mest taky aby odpovidala nazvum v tabulce countries
+UPDATE t_jan_stripek_weather_01 SET city = 'Athenai' WHERE city = 'Athens';
+UPDATE t_jan_stripek_weather_01 SET city = 'Bruxelles [Brussel]' WHERE city = 'Brussels';
+UPDATE t_jan_stripek_weather_01 SET city = 'Bucuresti' WHERE city = 'Bucharest';
+UPDATE t_jan_stripek_weather_01 SET city = 'Helsinki [Helsingfors]' WHERE city = 'Helsinki';
+UPDATE t_jan_stripek_weather_01 SET city = 'Kyiv' WHERE city = 'Kiev';
+UPDATE t_jan_stripek_weather_01 SET city = 'Lisboa' WHERE city = 'Lisbon';
+UPDATE t_jan_stripek_weather_01 SET city = 'Luxembourg [Luxemburg/L' WHERE city = 'Luxembourg';
+UPDATE t_jan_stripek_weather_01 SET city = 'Praha' WHERE city = 'Prague';
+UPDATE t_jan_stripek_weather_01 SET city = 'Roma' WHERE city = 'Rome';
+UPDATE t_jan_stripek_weather_01 SET city = 'Wien' WHERE city = 'Vienna';
+UPDATE t_jan_stripek_weather_01 SET city = 'Warszawa' WHERE city = 'Warsaw';
+
+CREATE OR REPLACE TABLE t_jan_stripek_weather_02 AS
+	SELECT 
+		w01.*,
+		cc.country
+	FROM t_jan_stripek_weather_01 w01
+	LEFT JOIN (
+				SELECT
+				country,
+				capital_city 
+				FROM t_jan_stripek_countries_capitals
+				) cc
+	ON w01.city = cc.capital_city	
+	WHERE date2 > '2020-01-21' AND date2 < '2021-05-24'
+	AND city IS NOT NULL
+	ORDER BY cc.country;
+
+-- SELECT * FROM t_jan_stripek_weather_02
+
+-- prumerna denni teplota
+CREATE OR REPLACE TABLE t_jan_stripek_weather_daily_avg_temp AS
+	SELECT 
+		date2,
+		country,
+		ROUND (AVG (temp2), 2) AS avg_daily_temp
+	FROM t_jan_stripek_weather_02
+	WHERE time IN ('06:00', '09:00', '12:00', '15:00')
+	GROUP BY country, date2;
+
+
+-- SELECT * FROM t_jan_stripek_weather_daily_avg_temp;
+
+
+-- pocet hodin, kdy srazky byly nenulove
+CREATE OR REPLACE TABLE t_jan_stripek_weather_hours_of_rain AS
+	SELECT 
+		date2,
+		country,
+		COUNT (rain) * 3 AS hours_of_rain
+	FROM t_jan_stripek_weather_02		
+	WHERE rain <> '0.0 mm'
+	GROUP BY country, date2; 
+
+-- SELECT * FROM t_jan_stripek_weather_hours_of_rain
+
+-- maximalni naraz vetru behem dne
+CREATE OR REPLACE TABLE t_jan_stripek_weather_max_gust AS
+	SELECT 
+		date2,
+		country,
+		MAX (gust2) AS max_gust
+	FROM t_jan_stripek_weather_02
+	GROUP BY country, date2;
+
+
+
+
+
+
+
+
+
+
+-- --------------------------------------------------------------
+-- GENEROVANI VYSLEDNYCH PANELOVYCH DAT -------------------------
+-- --------------------------------------------------------------
+
+-- vysvetleni binarnich hodnot:
+-- vikend = 1, pracovni den = 0
+-- rocni obdobi: jaro = 0, leto = 1, podzim = 2, zima = 3
+
+CREATE OR REPLACE TABLE t_jan_stripek_sql_project_tmp01 AS
+	SELECT 
+		cbd.country,
+		cbd.date,
+		-- DAYNAME(date) AS day,
+			CASE WHEN DAYNAME(cbd.date) IN ('Saturday', 'Sunday')
+				 THEN 1
+				 ELSE 0
+				 END AS weekend,
+			 CASE WHEN MONTH(cbd.date) IN (3,4,5) THEN 0 
+				 WHEN MONTH(cbd.date) IN (6,7,8) THEN 1
+				 WHEN MONTH(cbd.date) IN (9,10,11) THEN 2
+				 ELSE 3
+				 END AS year_period,
+		cbd.confirmed,
+		cbd.deaths,
+		cbd.recovered
+	FROM covid19_basic_differences cbd 
+	ORDER BY country, date;
+
+-- pridani primarnich klicu date a country
+ALTER TABLE t_jan_stripek_sql_project_tmp01
+ADD PRIMARY KEY (date, country(32) );
+
+
+-- vytvoreni nove projekotve tabulky a pripojeni sloupce population density
+CREATE OR REPLACE TABLE t_jan_stripek_sql_project_tmp02 AS
+	SELECT 
+		tmp01.country,
+		tmp01.date,
+		tmp01.weekend,
+		tmp01.year_period,
+		tmp01.confirmed,
+		tmp01.deaths,
+		tmp01.recovered,
+		tp.tests_performed,
+		pd.population_density AS population_density_2020,
+		ROUND (e2020.GDP / e2020.population, 2) AS gdp_per_capita_2020,
+		gc.gini,
+		gc.gini_data_from,
+		mu5.mortality_under5_2019,
+		me.median_age_2018,
+		r.religion,
+		r.religion_share_2020,
+		led.life_exp_diff_2015_1965	
+	FROM t_jan_stripek_sql_project_tmp01 tmp01 
+		LEFT JOIN t_jan_stripek_tests_performed tp 
+			ON tmp01.country = tp.country
+			AND tmp01.date = tp.date
+		LEFT JOIN t_jan_stripek_population_density pd
+			ON tmp01.country = pd.country
+		LEFT JOIN t_jan_stripek_economies_2020 e2020
+			ON tmp01.country = e2020.country
+		LEFT JOIN t_jan_stripek_gini_complete gc 
+			ON tmp01.country = gc.country
+		LEFT JOIN t_jan_stripek_mortality_under5 mu5
+			ON tmp01.country = mu5.country
+		LEFT JOIN t_jan_stripek_median_2018 me
+			ON tmp01.country = me.country
+		LEFT JOIN t_jan_stripek_religion_2020 r 
+			ON tmp01.country = r.country
+		LEFT JOIN t_jan_stripek_life_expectancy_diff led  
+			ON tmp01.country = led.country		
+	ORDER BY tmp01.country, tmp01.date;
+
+-- SELECT * FROM t_jan_stripek_sql_project_tmp02;
+
+
+
+-- nefunguje, nevim jak vyresit!?
+/*ALTER TABLE t_jan_stripek_sql_project_tmp02
+ADD PRIMARY KEY (date, country(32) );*/
+
+
+-- pripojuji treti cast s pocasim, od teto chvile neskutecne pomaly
+CREATE OR REPLACE TABLE t_jan_stripek_project_SQL_final_v01 AS
+	SELECT 
+		tmp02.*,
+		dat.avg_daily_temp,
+		hor.hours_of_rain,
+		mg.max_gust
+	FROM t_jan_stripek_sql_project_tmp02 tmp02
+		LEFT JOIN t_jan_stripek_weather_daily_avg_temp dat 
+			ON tmp02.country = dat.country
+			AND tmp02.date = dat.date2
+		LEFT JOIN t_jan_stripek_weather_hours_of_rain hor  
+			ON tmp02.country = hor.country
+			AND tmp02.date = hor.date2
+		LEFT JOIN t_jan_stripek_weather_max_gust mg  
+			ON tmp02.country = mg.country
+			AND tmp02.date = mg.date2;
+
+
+
+SELECT * FROM t_jan_stripek_project_SQL_final_v01; 
+
+
+
 
